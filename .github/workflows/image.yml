@@ -117,9 +117,11 @@ jobs:
           line="$(workers)"; echo "no limit: $line"
           if grep -q '(low-memory)' <<<"$line"; then exit 1; fi
 
-          docker run -d --name pp \
-            -e PHOTOPRISM_AUTH_MODE=public -e PHOTOPRISM_DISABLE_TLS=true -e PHOTOPRISM_INIT= \
-            "$img" /opt/photoprism/bin/photoprism start
+          # The server runs without the entrypoint, like the index jobs, since its restart
+          # loop can start a second server that fails to bind the port.
+          docker run -d --name pp --entrypoint /opt/photoprism/bin/photoprism \
+            -e PHOTOPRISM_AUTH_MODE=public -e PHOTOPRISM_DISABLE_TLS=true \
+            "$img" start
           for _ in $(seq 1 60); do
             if docker exec pp /opt/photoprism/bin/photoprism status; then
               docker rm -f pp >/dev/null
