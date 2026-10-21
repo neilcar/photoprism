@@ -18,14 +18,14 @@ var indexWorkersLogOnce sync.Once
 
 // IndexWorkers returns the number of indexing workers and logs the
 // chosen value once per process so support sessions can see why it was
-// picked (configured override, low-memory cap, SQLite cap, or auto).
+// picked (configured override, low-memory cap, SQLite cap, memory cap, or auto).
 func (c *Config) IndexWorkers() int {
 	num, reason := c.indexWorkers()
 	indexWorkersLogOnce.Do(func() {
 		log.Debugf("config: %s (%s, %s, driver %s)",
 			english.Plural(num, "indexing worker", "indexing workers"),
 			reason,
-			english.Plural(runtime.NumCPU(), "cpu", "cpus"),
+			english.Plural(availableCpus(), "cpu", "cpus"),
 			c.DatabaseDriver())
 	})
 	return num
@@ -40,20 +40,36 @@ func (c *Config) IndexWorkersReason() string {
 }
 
 // indexWorkers derives the indexing worker count from the configured option,
-// runtime.NumCPU(), and the database driver. Returns the count and a reason
-// tag (low-memory, sqlite-cap, configured, configured-clamped, auto, single-cpu)
-// so callers can surface the rationale without re-deriving it. Uses
-// runtime.NumCPU() (cgroup- and affinity-aware) rather than CPUID-based
-// physical-core probes, which are unreliable under virtualization.
+// the available CPUs and memory, and the database driver. Returns the count and
+// a reason tag (low-memory, sqlite-cap, configured, configured-clamped, auto,
+// memory-cap, single-cpu) so callers can surface the rationale without
+// re-deriving it. An explicitly configured count is not reduced by the memory
+// estimate, so operators can override it.
 func (c *Config) indexWorkers() (n int, reason string) {
 	// Cap to one worker on systems below the recommended memory threshold.
 	if TotalMem < RecommendedMem {
 		return 1, "low-memory"
 	}
 
-	cpus := runtime.NumCPU()
 	configured := parseIndexWorkers(c.options.IndexWorkers)
+	n, reason = c.cpuIndexWorkers(availableCpus(), configured)
 
+	if configured > 0 {
+		return n, reason
+	}
+
+	// Each worker decodes, converts, and resizes originals in parallel, so the
+	// available memory rather than the CPUs is the limit in small containers.
+	if limit := memIndexWorkers(TotalMem); n > limit {
+		return limit, "memory-cap"
+	}
+
+	return n, reason
+}
+
+// cpuIndexWorkers derives the indexing worker count from the available CPUs, the
+// configured count, and the database driver.
+func (c *Config) cpuIndexWorkers(cpus, configured int) (n int, reason string) {
 	// SQLite serializes writes, so we cap workers to avoid lock contention.
 	if c.DatabaseDriver() == dsn.DriverSQLite3 {
 		switch {
@@ -67,7 +83,7 @@ func (c *Config) indexWorkers() (n int, reason string) {
 		// Small SQLite installs fall through to the auto path below.
 	}
 
-	// Honor an explicit operator override, clamped to the visible CPUs.
+	// Honor an explicit operator override, clamped to the available CPUs.
 	if configured > cpus {
 		return cpus, "configured-clamped"
 	}
@@ -75,12 +91,29 @@ func (c *Config) indexWorkers() (n int, reason string) {
 		return configured, "configured"
 	}
 
-	// Half the visible CPUs leaves headroom for OS, DB, HTTP, and other workers.
+	// Half the available CPUs leaves headroom for OS, DB, HTTP, and other workers.
 	if half := cpus / 2; half >= 1 {
 		return half, "auto"
 	}
 
 	return 1, "single-cpu"
+}
+
+// memIndexWorkers returns the number of indexing workers that fit into the given
+// amount of memory, reserving IndexBaseMem for the rest of the process.
+func memIndexWorkers(total uint64) int {
+	if total < IndexBaseMem+2*IndexWorkerMem {
+		return 1
+	}
+
+	return int((total - IndexBaseMem) / IndexWorkerMem)
+}
+
+// availableCpus returns the number of CPUs this process can use. runtime.NumCPU()
+// honors the CPU affinity mask, and GOMAXPROCS also honors a cgroup CPU limit,
+// e.g. in a Kubernetes pod, where NumCPU still reports every core of the node.
+func availableCpus() int {
+	return max(1, min(runtime.NumCPU(), runtime.GOMAXPROCS(0)))
 }
 
 // parseIndexWorkers normalizes the index-workers option to an int; empty,

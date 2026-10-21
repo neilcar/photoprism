@@ -5,7 +5,6 @@ import (
 	"runtime"
 
 	"github.com/dustin/go-humanize"
-	"github.com/pbnjay/memory"
 )
 
 // Resources represents runtime resource information.
@@ -28,8 +27,8 @@ func (r *Resources) Update() {
 
 	r.Cores = runtime.NumCPU()
 	r.Routines = runtime.NumGoroutine()
-	r.Memory.Total = memory.TotalMemory()
-	r.Memory.Free = memory.FreeMemory()
+	r.Memory.Total = TotalMemory()
+	r.Memory.Free = FreeMemory()
 	r.Memory.Used = mem.Alloc
 	r.Memory.Reserved = mem.Sys
 	r.Memory.Info = fmt.Sprintf("Used %s / Reserved %s", humanize.Bytes(r.Memory.Used), humanize.Bytes(r.Memory.Reserved))

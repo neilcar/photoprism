@@ -72,6 +72,14 @@ const MinMem = GigaByte
 // RecommendedMem defines the recommended amount of system memory.
 const RecommendedMem = 3 * GigaByte // 3,000,000,000 Bytes
 
+// IndexBaseMem is the memory reserved for the process itself, including its AI models
+// and image cache, when deriving the number of indexing workers from the available memory.
+const IndexBaseMem = 1500 * MegaByte // 1,500,000,000 Bytes
+
+// IndexWorkerMem is the estimated peak memory of one indexing worker while it decodes,
+// converts, and resizes a large original, including external tools like ffmpeg.
+const IndexWorkerMem = GigaByte // 1,000,000,000 Bytes
+
 // DefaultResolutionLimit defines the default resolution limit.
 const DefaultResolutionLimit = 150 // 150 Megapixels
 
