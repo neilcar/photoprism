@@ -99,7 +99,12 @@ jobs:
           img=photoprism-k8s:test
           # pp takes photoprism arguments; workers takes docker run options.
           pp() { docker run --rm --entrypoint /opt/photoprism/bin/photoprism "$img" "$@"; }
-          workers() { docker run --rm "$@" --entrypoint /opt/photoprism/bin/photoprism "$img" show config | grep -m1 'index-workers'; }
+          # The full report is captured first, so photoprism does not write to a closed pipe.
+          workers() {
+            local report
+            report="$(docker run --rm "$@" --entrypoint /opt/photoprism/bin/photoprism "$img" show config)"
+            grep -m1 'index-workers' <<<"$report"
+          }
 
           pp --version
 
