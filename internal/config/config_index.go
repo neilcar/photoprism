@@ -113,7 +113,8 @@ func memIndexWorkers(total uint64) int {
 
 // availableCpus returns the number of CPUs this process can use. runtime.NumCPU()
 // honors the CPU affinity mask, and GOMAXPROCS also honors a cgroup CPU limit,
-// e.g. in a Kubernetes pod, where NumCPU still reports every core of the node.
+// rounded up and at least 2, e.g. in a Kubernetes pod, where NumCPU still reports
+// every core of the node.
 func availableCpus() int {
 	return max(1, min(runtime.NumCPU(), runtime.GOMAXPROCS(0)))
 }

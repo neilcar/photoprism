@@ -106,7 +106,8 @@ jobs:
           # The worker count must follow the container limits, not the runner's memory and CPUs.
           line="$(workers --memory 2g)"; echo "2 GB limit: $line"
           grep -q '(low-memory)' <<<"$line"
-          line="$(workers --memory 4g --cpus 1)"; echo "1 cpu limit: $line"
+          # Go sets GOMAXPROCS from a CPU quota but never below 2, so pin to one CPU instead.
+          line="$(workers --memory 4g --cpuset-cpus 0)"; echo "1 cpu: $line"
           grep -q '(single-cpu)' <<<"$line"
           line="$(workers)"; echo "no limit: $line"
           if grep -q '(low-memory)' <<<"$line"; then exit 1; fi
