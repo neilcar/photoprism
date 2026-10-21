@@ -1,5 +1,5 @@
 ##################################################### BUILD STAGE ######################################################
-FROM photoprism/develop:resolute AS build
+FROM photoprism/develop:261004-resolute AS build
 
 # Copyright © 2018 - 2026 PhotoPrism UG. All rights reserved.
 #
@@ -20,7 +20,7 @@ RUN make all install DESTDIR=/opt/photoprism
 
 ################################################## PRODUCTION STAGE ####################################################
 #### Base Image: Ubuntu 26.04 LTS (Resolute Raccoon)
-FROM photoprism/develop:resolute-slim
+FROM photoprism/develop:261004-resolute-slim
 
 # Add Open Container Initiative (OCI) annotations.
 # See: https://github.com/opencontainers/image-spec/blob/main/annotations.md

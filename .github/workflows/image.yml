@@ -5,7 +5,7 @@ name: Image
 
 on:
   push:
-    branches: [k8s-parallel-index]
+    branches: [k8s-parallel-index, k8s-261007]
     tags: ["k8s-*"]
   pull_request:
   workflow_dispatch:
@@ -25,7 +25,7 @@ jobs:
     name: Go tests
     runs-on: ubuntu-24.04
     timeout-minutes: 45
-    container: photoprism/develop:261009-resolute
+    container: photoprism/develop:261004-resolute
     steps:
       - uses: actions/checkout@v5
       - name: Test pkg/env
