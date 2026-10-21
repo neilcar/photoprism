@@ -1,0 +1,205 @@
+name: Image
+
+# Tests the branch, builds the Ubuntu 26.04 image for amd64 and arm64 on native runners,
+# smoke tests each architecture, and publishes a multi-arch manifest to GHCR.
+
+on:
+  push:
+    branches: [k8s-parallel-index]
+    tags: ["k8s-*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
+jobs:
+  go-test:
+    name: Go tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    container: photoprism/develop:261009-resolute
+    steps:
+      - uses: actions/checkout@v5
+      - name: Test pkg/env
+        run: go test -count=1 ./pkg/env
+      - name: Test index worker config
+        run: |
+          mkdir -p storage
+          go test -count=1 -run 'IndexWorkers|MemIndexWorkers|AvailableCpus|ParseIndexWorkers' ./internal/config
+
+  script-test:
+    name: Parallel index scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Shellcheck
+        run: shellcheck -S warning setup/kubernetes/parallel-index/*.sh setup/kubernetes/parallel-index/scripts/*.sh
+      - name: Test
+        run: bash setup/kubernetes/parallel-index/test.sh
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: [go-test, script-test]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v5
+
+      # The build stage pulls the develop image and compiles the backend and frontend in it.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af >/dev/null
+          df -h /
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build tag
+        id: tag
+        run: echo "build_tag=$(date -u +%y%m%d)-$(git rev-parse --short=9 HEAD)" >>"$GITHUB_OUTPUT"
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/photoprism/resolute/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          build-args: BUILD_TAG=${{ steps.tag.outputs.build_tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          tags: photoprism-k8s:test
+          load: true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          img=photoprism-k8s:test
+          pp() { docker run --rm "$@" --entrypoint /opt/photoprism/bin/photoprism "$img"; }
+          workers() { pp "$@" show config | grep -m1 'index-workers'; }
+
+          pp --version
+
+          # The worker count must follow the container limits, not the runner's memory and CPUs.
+          line="$(workers --memory 2g)"; echo "2 GB limit: $line"
+          grep -q '(low-memory)' <<<"$line"
+          line="$(workers --memory 4g --cpus 1)"; echo "1 cpu limit: $line"
+          grep -q '(single-cpu)' <<<"$line"
+          line="$(workers)"; echo "no limit: $line"
+          if grep -q '(low-memory)' <<<"$line"; then exit 1; fi
+
+          docker run -d --name pp \
+            -e PHOTOPRISM_AUTH_MODE=public -e PHOTOPRISM_DISABLE_TLS=true -e PHOTOPRISM_INIT= \
+            "$img" /opt/photoprism/bin/photoprism start
+          for _ in $(seq 1 60); do
+            if docker exec pp /opt/photoprism/bin/photoprism status; then
+              docker rm -f pp >/dev/null
+              exit 0
+            fi
+            sleep 5
+          done
+          docker logs pp | tail -50
+          exit 1
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push by digest
+        if: github.event_name != 'pull_request'
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/photoprism/resolute/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          build-args: BUILD_TAG=${{ steps.tag.outputs.build_tag }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+
+      - name: Save digest
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          retention-days: 1
+
+  publish:
+    name: Publish
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-*
+          merge-multiple: true
+          path: /tmp/digests
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=sha,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/k8s-parallel-index' }}
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create manifest
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<<"$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "${IMAGE}@sha256:%s " *)
+          docker buildx imagetools inspect "${IMAGE}:${{ steps.meta.outputs.version }}"
