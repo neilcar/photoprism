@@ -97,8 +97,9 @@ jobs:
         run: |
           set -euo pipefail
           img=photoprism-k8s:test
-          pp() { docker run --rm "$@" --entrypoint /opt/photoprism/bin/photoprism "$img"; }
-          workers() { pp "$@" show config | grep -m1 'index-workers'; }
+          # pp takes photoprism arguments; workers takes docker run options.
+          pp() { docker run --rm --entrypoint /opt/photoprism/bin/photoprism "$img" "$@"; }
+          workers() { docker run --rm "$@" --entrypoint /opt/photoprism/bin/photoprism "$img" show config | grep -m1 'index-workers'; }
 
           pp --version
 
