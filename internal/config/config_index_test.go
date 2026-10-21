@@ -46,7 +46,7 @@ func TestConfig_IndexWorkersOverride(t *testing.T) {
 			c.options.IndexWorkers = tc.value
 			got := c.IndexWorkers()
 			assert.GreaterOrEqual(t, got, tc.minCount)
-			assert.LessOrEqual(t, got, runtime.NumCPU())
+			assert.LessOrEqual(t, got, availableCpus())
 		})
 	}
 }
@@ -68,7 +68,8 @@ func TestConfig_IndexWorkersReason(t *testing.T) {
 		TotalMem = originalMem
 	})
 
-	cpus := runtime.NumCPU()
+	cpus := availableCpus()
+	largeMem := uint64(1) << 40
 
 	t.Run("LowMemory", func(t *testing.T) {
 		TotalMem = RecommendedMem - 1
@@ -112,7 +113,7 @@ func TestConfig_IndexWorkersReason(t *testing.T) {
 		assert.Equal(t, "configured", reason)
 	})
 	t.Run("MysqlAuto", func(t *testing.T) {
-		TotalMem = originalMem
+		TotalMem = largeMem
 		c.options.DatabaseDriver = dsn.DriverMySQL
 		c.options.IndexWorkers = IndexWorkersAuto
 
@@ -144,6 +145,45 @@ func TestConfig_IndexWorkersReason(t *testing.T) {
 		assert.Equal(t, cpus, got)
 		assert.Equal(t, "configured-clamped", reason)
 	})
+	t.Run("MysqlAutoMemoryCap", func(t *testing.T) {
+		if cpus < 4 {
+			t.Skipf("requires at least 4 CPUs (have %d)", cpus)
+		}
+		TotalMem = IndexBaseMem + IndexWorkerMem + IndexWorkerMem/2 + RecommendedMem
+		c.options.DatabaseDriver = dsn.DriverMySQL
+		c.options.IndexWorkers = IndexWorkersAuto
+
+		want := memIndexWorkers(TotalMem)
+		got, reason := c.indexWorkers()
+		if want < cpus/2 {
+			assert.Equal(t, want, got)
+			assert.Equal(t, "memory-cap", reason)
+		} else {
+			assert.Equal(t, cpus/2, got)
+			assert.Equal(t, "auto", reason)
+		}
+	})
+	t.Run("MysqlConfiguredIgnoresMemoryCap", func(t *testing.T) {
+		TotalMem = RecommendedMem
+		c.options.DatabaseDriver = dsn.DriverMySQL
+		c.options.IndexWorkers = "1"
+
+		got, reason := c.indexWorkers()
+		assert.Equal(t, 1, got)
+		assert.Equal(t, "configured", reason)
+	})
+	t.Run("SqliteAutoMemoryCap", func(t *testing.T) {
+		if cpus < 8 {
+			t.Skipf("requires at least 8 CPUs (have %d)", cpus)
+		}
+		TotalMem = RecommendedMem + GigaByte
+		c.options.DatabaseDriver = dsn.DriverSQLite3
+		c.options.IndexWorkers = IndexWorkersAuto
+
+		got, reason := c.indexWorkers()
+		assert.Equal(t, memIndexWorkers(TotalMem), got)
+		assert.Equal(t, "memory-cap", reason)
+	})
 	t.Run("ReportGetterMatchesHelper", func(t *testing.T) {
 		TotalMem = originalMem
 		c.options.DatabaseDriver = dsn.DriverMySQL
@@ -152,6 +192,41 @@ func TestConfig_IndexWorkersReason(t *testing.T) {
 		want, wantReason := c.indexWorkers()
 		assert.Equal(t, want, c.IndexWorkers())
 		assert.Equal(t, wantReason, c.IndexWorkersReason())
+	})
+}
+
+func TestMemIndexWorkers(t *testing.T) {
+	cases := []struct {
+		name  string
+		total uint64
+		want  int
+	}{
+		{"Zero", 0, 1},
+		{"BelowTwoWorkers", IndexBaseMem + 2*IndexWorkerMem - 1, 1},
+		{"TwoWorkers", IndexBaseMem + 2*IndexWorkerMem, 2},
+		{"FourGiB", 4 * 1024 * 1024 * 1024, 2},
+		{"EightGiB", 8 * 1024 * 1024 * 1024, 7},
+		{"SixteenGB", 16 * GigaByte, 14},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, memIndexWorkers(tc.total))
+		})
+	}
+}
+
+func TestAvailableCpus(t *testing.T) {
+	t.Run("Default", func(t *testing.T) {
+		got := availableCpus()
+		assert.GreaterOrEqual(t, got, 1)
+		assert.LessOrEqual(t, got, runtime.NumCPU())
+	})
+	t.Run("GOMAXPROCS", func(t *testing.T) {
+		original := runtime.GOMAXPROCS(1)
+		t.Cleanup(func() { runtime.GOMAXPROCS(original) })
+
+		assert.Equal(t, 1, availableCpus())
 	})
 }
 

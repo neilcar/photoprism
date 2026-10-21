@@ -45,7 +45,6 @@ import (
 	"github.com/dustin/go-humanize"
 	"github.com/klauspost/cpuid/v2"
 	gc "github.com/patrickmn/go-cache"
-	"github.com/pbnjay/memory"
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli/v2"
 	"gorm.io/gorm"
@@ -65,6 +64,7 @@ import (
 	"github.com/photoprism/photoprism/internal/thumb"
 	"github.com/photoprism/photoprism/pkg/checksum"
 	"github.com/photoprism/photoprism/pkg/clean"
+	"github.com/photoprism/photoprism/pkg/env"
 	"github.com/photoprism/photoprism/pkg/fs"
 	"github.com/photoprism/photoprism/pkg/fs/disk"
 	"github.com/photoprism/photoprism/pkg/i18n"
@@ -104,7 +104,7 @@ type Values = map[string]any
 
 // init initializes memory limits, entity caching, and public thumbnail sizes.
 func init() {
-	initMemory(memory.TotalMemory())
+	initMemory(env.TotalMemory())
 
 	// Disable entity cache if requested.
 	if txt.Bool(os.Getenv(EnvVar("disable-photolabelcache"))) {
@@ -282,7 +282,7 @@ func (c *Config) Init() error {
 	Ext(StageInit).Init(c)
 
 	// Initialize thumbnail package.
-	thumb.Init(memory.FreeMemory(), c.IndexWorkers(), c.ThumbLibrary())
+	thumb.Init(env.FreeMemory(), c.IndexWorkers(), c.ThumbLibrary())
 
 	// Set minimum free storage space in percent.
 	disk.StorageLowPct = c.StorageFree()
