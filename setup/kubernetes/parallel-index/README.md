@@ -73,6 +73,14 @@ If the storage volume is `ReadWriteOnce`, `STORAGE_MODE=auto` pins all index pod
 - Progress of the index pods is not shown in the web interface. Library counts are updated by the finalize pass.
 - The entrypoint of the PhotoPrism image restarts a command that exits with code 1, so the Jobs run `bash` directly, with the security context of the PhotoPrism pod, instead of using the entrypoint.
 
+## Tests
+
+`test.sh` runs `plan.sh` and `index.sh` against a generated library with a stub `photoprism` command and simulated cgroup limits:
+
+```bash
+bash setup/kubernetes/parallel-index/test.sh
+```
+
 ## Exit Codes
 
 | Code | Meaning                                                      | Job behavior                 |
