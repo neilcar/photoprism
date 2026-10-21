@@ -100,8 +100,13 @@ func TestConfig_IndexWorkersReason(t *testing.T) {
 		c.options.IndexWorkers = "12"
 
 		got, reason := c.indexWorkers()
-		assert.Equal(t, 4, got)
-		assert.Equal(t, "sqlite-cap", reason)
+		if cpus >= 4 {
+			assert.Equal(t, 4, got)
+			assert.Equal(t, "sqlite-cap", reason)
+		} else {
+			assert.Equal(t, cpus, got)
+			assert.Equal(t, "configured-clamped", reason)
+		}
 	})
 	t.Run("SqliteOverrideAtOrBelowCap", func(t *testing.T) {
 		TotalMem = originalMem
@@ -109,8 +114,13 @@ func TestConfig_IndexWorkersReason(t *testing.T) {
 		c.options.IndexWorkers = "3"
 
 		got, reason := c.indexWorkers()
-		assert.Equal(t, 3, got)
-		assert.Equal(t, "configured", reason)
+		if cpus >= 3 {
+			assert.Equal(t, 3, got)
+			assert.Equal(t, "configured", reason)
+		} else {
+			assert.Equal(t, cpus, got)
+			assert.Equal(t, "configured-clamped", reason)
+		}
 	})
 	t.Run("MysqlAuto", func(t *testing.T) {
 		TotalMem = largeMem

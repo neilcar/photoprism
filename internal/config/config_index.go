@@ -73,8 +73,10 @@ func (c *Config) cpuIndexWorkers(cpus, configured int) (n int, reason string) {
 	// SQLite serializes writes, so we cap workers to avoid lock contention.
 	if c.DatabaseDriver() == dsn.DriverSQLite3 {
 		switch {
-		case configured > 4:
+		case configured > 4 && cpus >= 4:
 			return 4, "sqlite-cap"
+		case configured > cpus:
+			return cpus, "configured-clamped"
 		case configured > 0:
 			return configured, "configured"
 		case cpus >= 8:
