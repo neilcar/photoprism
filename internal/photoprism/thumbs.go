@@ -24,6 +24,8 @@ import (
 // Thumbs represents a thumbnail image generator.
 type Thumbs struct {
 	conf *config.Config
+	// IndexedOnly skips files that are not in the index, since they are never shown.
+	IndexedOnly bool
 }
 
 // NewThumbs returns a new thumbnails generator and expects the config as argument.
@@ -149,7 +151,9 @@ func (w *Thumbs) Dir(dir string, force bool) (fs.Done, error) {
 
 		done[fileName] = fs.Processed
 		progress.Add()
-		useIndexedHash(mf)
+		if !useIndexedHash(mf) && w.IndexedOnly {
+			return nil
+		}
 
 		relativeName := mf.RelName(dir)
 
@@ -224,6 +228,7 @@ func (p *thumbsProgress) Done() {
 
 // useIndexedHash gives m the hash the index stored for it if the file has not changed since, so
 // checking for existing thumbnails, which are named by hash, does not read the whole file again.
+// It reports whether the file is in the index.
 func useIndexedHash(m *MediaFile) bool {
 	var f entity.File
 
@@ -232,7 +237,7 @@ func useIndexedHash(m *MediaFile) bool {
 		First(&f).Error; err != nil {
 		return false
 	} else if f.Changed(m.FileSize(), m.ModTime()) {
-		return false
+		return true
 	}
 
 	m.hash = f.FileHash

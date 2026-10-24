@@ -26,6 +26,10 @@ var ThumbsCommand = &cli.Command{
 			Aliases: []string{"o"},
 			Usage:   "scan originals only, skip sidecar folder",
 		},
+		&cli.BoolFlag{
+			Name:  "indexed-only",
+			Usage: "skip files that are not indexed",
+		},
 	},
 	Action: thumbsAction,
 }
@@ -79,6 +83,7 @@ func thumbsAction(ctx *cli.Context) error {
 	}
 
 	w := get.Thumbs()
+	w.IndexedOnly = ctx.Bool("indexed-only")
 
 	if err = w.Start(dir, ctx.Bool("force"), ctx.Bool("originals")); err != nil {
 		return err
