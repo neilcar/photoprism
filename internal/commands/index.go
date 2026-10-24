@@ -39,6 +39,10 @@ var indexFlags = []cli.Flag{
 		Aliases: []string{"c"},
 		Usage:   "removes orphan index entries and thumbnails",
 	},
+	&cli.BoolFlag{
+		Name:  "skip-library-update",
+		Usage: "skips the library-wide index update after purging, so that folders can be indexed in parallel; run purge afterwards",
+	},
 }
 
 // indexAction indexes all photos in originals directory (photo library)
@@ -90,12 +94,7 @@ func indexAction(ctx *cli.Context) error {
 
 	// Remove missing files from search results.
 	if w := get.Purge(); w != nil {
-		// Purge worker options.
-		opt := photoprism.PurgeOptions{
-			Path:   subPath,
-			Ignore: found,
-			Force:  ctx.Bool("force") || ctx.Bool("cleanup") || indexed > 0,
-		}
+		opt := indexPurgeOptions(ctx, subPath, found, indexed)
 
 		// Start purge.
 		purgeStart := time.Now()
@@ -130,4 +129,14 @@ func indexAction(ctx *cli.Context) error {
 	log.Infof("library: indexed %s in %s", english.Plural(len(found), "file", "files"), elapsed)
 
 	return nil
+}
+
+// indexPurgeOptions returns the options of the purge that follows indexing.
+func indexPurgeOptions(ctx *cli.Context, subPath string, found fs.Done, indexed int) photoprism.PurgeOptions {
+	return photoprism.PurgeOptions{
+		Path:      subPath,
+		Ignore:    found,
+		Force:     ctx.Bool("force") || ctx.Bool("cleanup") || indexed > 0,
+		SkipIndex: ctx.Bool("skip-library-update"),
+	}
 }

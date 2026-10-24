@@ -274,6 +274,12 @@ func (w *Purge) Start(opt PurgeOptions) (purgedFiles map[string]bool, purgedPhot
 		return purgedFiles, purgedPhotos, updates(), nil
 	}
 
+	// Leave the library-wide update to a later purge.
+	if opt.SkipIndex {
+		log.Debugf("purge: skipped index update")
+		return purgedFiles, purgedPhotos, updates(), nil
+	}
+
 	startIndex := time.Now()
 
 	if err = query.FixPrimaries(); err != nil {
