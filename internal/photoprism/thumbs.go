@@ -11,6 +11,7 @@ import (
 	"github.com/karrick/godirwalk"
 
 	"github.com/photoprism/photoprism/internal/config"
+	"github.com/photoprism/photoprism/internal/entity"
 	"github.com/photoprism/photoprism/internal/event"
 	"github.com/photoprism/photoprism/internal/mutex"
 	"github.com/photoprism/photoprism/pkg/clean"
@@ -148,6 +149,7 @@ func (w *Thumbs) Dir(dir string, force bool) (fs.Done, error) {
 
 		done[fileName] = fs.Processed
 		progress.Add()
+		useIndexedHash(mf)
 
 		relativeName := mf.RelName(dir)
 
@@ -218,4 +220,22 @@ func (p *thumbsProgress) Add() {
 // Done logs the number of files checked in total.
 func (p *thumbsProgress) Done() {
 	log.Infof("thumbs: checked %s in %s [%s]", english.Plural(p.files, "file", "files"), clean.Log(p.dir), time.Since(p.start).Round(time.Second))
+}
+
+// useIndexedHash gives m the hash the index stored for it if the file has not changed since, so
+// checking for existing thumbnails, which are named by hash, does not read the whole file again.
+func useIndexedHash(m *MediaFile) bool {
+	var f entity.File
+
+	if err := entity.Db().
+		Where("file_name = ? AND file_root = ? AND file_missing = ? AND file_hash <> ''", m.RootRelName(), m.Root(), false).
+		First(&f).Error; err != nil {
+		return false
+	} else if f.Changed(m.FileSize(), m.ModTime()) {
+		return false
+	}
+
+	m.hash = f.FileHash
+
+	return true
 }
