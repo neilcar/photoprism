@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"sync"
+	"time"
 
+	"github.com/dustin/go-humanize/english"
 	"github.com/karrick/godirwalk"
 
 	"github.com/photoprism/photoprism/internal/config"
@@ -111,6 +113,9 @@ func (w *Thumbs) Dir(dir string, force bool) (fs.Done, error) {
 		log.Infof(`thumbs: ignored "%s"`, fs.RelName(fileName, dir))
 	}
 
+	progress := newThumbsProgress(dir)
+	defer progress.Done()
+
 	handler := func(fileName string, info *godirwalk.Dirent) error {
 		defer func() {
 			if r := recover(); r != nil {
@@ -142,6 +147,7 @@ func (w *Thumbs) Dir(dir string, force bool) (fs.Done, error) {
 		}
 
 		done[fileName] = fs.Processed
+		progress.Add()
 
 		relativeName := mf.RelName(dir)
 
@@ -179,4 +185,37 @@ func (w *Thumbs) Dir(dir string, force bool) (fs.Done, error) {
 	wg.Wait()
 
 	return done, err
+}
+
+// thumbsProgressInterval is how often a running Thumbs.Dir logs how many files it has checked.
+var thumbsProgressInterval = 30 * time.Second
+
+// thumbsProgress logs how many files Thumbs.Dir has checked, since thumbnails that already exist
+// are skipped without a log line and a large folder otherwise goes quiet for a long time.
+type thumbsProgress struct {
+	dir   string
+	start time.Time
+	last  time.Time
+	files int
+}
+
+// newThumbsProgress returns a progress counter for dir that starts now.
+func newThumbsProgress(dir string) *thumbsProgress {
+	now := time.Now()
+	return &thumbsProgress{dir: dir, start: now, last: now}
+}
+
+// Add counts a file and logs the count once thumbsProgressInterval has passed since the last line.
+func (p *thumbsProgress) Add() {
+	p.files++
+
+	if now := time.Now(); now.Sub(p.last) >= thumbsProgressInterval {
+		p.last = now
+		log.Infof("thumbs: %s in %s so far [%s]", english.Plural(p.files, "file", "files"), clean.Log(p.dir), time.Since(p.start).Round(time.Second))
+	}
+}
+
+// Done logs the number of files checked in total.
+func (p *thumbsProgress) Done() {
+	log.Infof("thumbs: checked %s in %s [%s]", english.Plural(p.files, "file", "files"), clean.Log(p.dir), time.Since(p.start).Round(time.Second))
 }
