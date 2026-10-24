@@ -47,3 +47,16 @@ func TestIndexPurgeOptions(t *testing.T) {
 		assert.True(t, opt.SkipIndex)
 	})
 }
+
+func TestIndexOptions(t *testing.T) {
+	t.Run("Default", func(t *testing.T) {
+		opt := indexOptions(newIndexContext(t), "2021", true, nil)
+		assert.Equal(t, "2021", opt.Path)
+		assert.True(t, opt.SkipArchived)
+		assert.False(t, opt.SkipLibraryWide)
+	})
+	t.Run("SkipLibraryUpdate", func(t *testing.T) {
+		opt := indexOptions(newIndexContext(t, "--skip-library-update"), "2021", true, nil)
+		assert.True(t, opt.SkipLibraryWide)
+	})
+}

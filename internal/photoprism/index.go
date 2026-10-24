@@ -446,7 +446,9 @@ func (ind *Index) Start(o IndexOptions) (found fs.Done, updated int) {
 		}
 	}
 
-	if updated > 0 {
+	if updated > 0 && o.SkipLibraryWide {
+		log.Debugf("index: skipped face clustering and count updates for the library")
+	} else if updated > 0 {
 		event.Publish("index.updating", event.Data{
 			"uid":  o.UID,
 			"step": "faces",

@@ -8,6 +8,7 @@ import (
 	"github.com/dustin/go-humanize/english"
 	"github.com/urfave/cli/v2"
 
+	"github.com/photoprism/photoprism/internal/config"
 	"github.com/photoprism/photoprism/internal/photoprism"
 	"github.com/photoprism/photoprism/internal/photoprism/get"
 	"github.com/photoprism/photoprism/pkg/clean"
@@ -41,7 +42,7 @@ var indexFlags = []cli.Flag{
 	},
 	&cli.BoolFlag{
 		Name:  "skip-library-update",
-		Usage: "skips the library-wide index update after purging, so that folders can be indexed in parallel; run purge afterwards",
+		Usage: "skips the library-wide face clustering, counts, and index update after indexing, so that folders can be indexed in parallel; run purge and faces update afterwards",
 	},
 }
 
@@ -85,7 +86,7 @@ func indexAction(ctx *cli.Context) error {
 	if w := get.Index(); w != nil {
 		indexStart := time.Now()
 		convert := conf.Settings().Index.Convert && conf.SidecarWritable()
-		opt := photoprism.NewIndexOptions(subPath, ctx.Bool("force"), convert, true, false, !ctx.Bool("archived"), conf)
+		opt := indexOptions(ctx, subPath, convert, conf)
 
 		found, indexed = w.Start(opt)
 
@@ -139,4 +140,11 @@ func indexPurgeOptions(ctx *cli.Context, subPath string, found fs.Done, indexed 
 		Force:     ctx.Bool("force") || ctx.Bool("cleanup") || indexed > 0,
 		SkipIndex: ctx.Bool("skip-library-update"),
 	}
+}
+
+// indexOptions returns the options of the index command for a subfolder.
+func indexOptions(ctx *cli.Context, subPath string, convert bool, conf *config.Config) photoprism.IndexOptions {
+	opt := photoprism.NewIndexOptions(subPath, ctx.Bool("force"), convert, true, false, !ctx.Bool("archived"), conf)
+	opt.SkipLibraryWide = ctx.Bool("skip-library-update")
+	return opt
 }

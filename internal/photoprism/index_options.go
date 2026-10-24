@@ -27,6 +27,7 @@ type IndexOptions struct {
 	RegenerateFaces  bool              // Replace the detection of existing face markers, see Index.regenerateFaces.
 	FaceRegeneration *FaceRegeneration // Counts the changes RegenerateFaces makes, if set.
 	SkipArchived     bool
+	SkipLibraryWide  bool // Skip face clustering and count updates for the whole library after indexing.
 	ByteLimit        int64
 	ResolutionLimit  int
 }

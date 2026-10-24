@@ -237,7 +237,7 @@ func FixPrimaries() error {
 		log.Debugf("index: searching primary file for %s", p.PhotoUID)
 
 		if err := p.SetPrimary(""); err != nil {
-			log.Infof("index: %s", err)
+			log.Debugf("index: %s", err)
 		}
 	}
 
