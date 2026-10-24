@@ -1,7 +1,8 @@
 name: Image
 
-# Tests the branch, builds the Ubuntu 26.04 image for amd64 and arm64 on native runners,
-# smoke tests each architecture, and publishes a multi-arch manifest to GHCR.
+# Tests the branch and, at the same time, builds the Ubuntu 26.04 image for amd64 and arm64 on
+# native runners and smoke tests each architecture. The multi-arch manifest is published to GHCR
+# only when the tests and both builds pass.
 
 on:
   push:
@@ -48,7 +49,6 @@ jobs:
 
   build:
     name: Build ${{ matrix.arch }}
-    needs: [go-test, script-test]
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     permissions:
@@ -65,7 +65,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # The build stage pulls the develop image and compiles the backend and frontend in it.
+      # The build stage pulls the develop image and compiles the backend and frontend in it. There is
+      # no GitHub Actions cache: COPY . . invalidates the build stage on every commit, and saving
+      # the layers took longer than rebuilding them.
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
@@ -90,8 +92,6 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           tags: photoprism-k8s:test
           load: true
-          cache-from: type=gha,scope=${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
 
       - name: Smoke test
         run: |
@@ -153,7 +153,6 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
-          cache-from: type=gha,scope=${{ matrix.arch }}
 
       - name: Save digest
         if: github.event_name != 'pull_request'
@@ -172,7 +171,7 @@ jobs:
 
   publish:
     name: Publish
-    needs: build
+    needs: [go-test, script-test, build]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
