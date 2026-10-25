@@ -1,0 +1,8 @@
+version: 2
+updates:
+  # Bumps the photoprism-base digests in the parallel index image.
+  - package-ecosystem: docker
+    directory: /docker/photoprism/wolfi
+    target-branch: k8s-261007-skip-fixes
+    schedule:
+      interval: daily

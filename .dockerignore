@@ -29,6 +29,8 @@
 /docs/
 /bin/
 /i
+# The parallel-index checkout, a named build context of the wolfi image:
+/parallel-index/
 
 # Docker configuration files:
 .dockerignore

@@ -1,0 +1,281 @@
+name: Image (Wolfi)
+
+# Builds the shell-free photoprism-index image on the distroless photoprism-base for amd64 and
+# arm64 on native runners, checks it and converts every media format with it, and compares its
+# Trivy findings with the Ubuntu photoprism-k8s image. The multi-arch manifest is published to
+# GHCR, signed and attested only when both architectures pass.
+
+on:
+  push:
+    branches: [k8s-261007-skip-fixes]
+    tags: ["k8s-261007-wolfi-*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMAGE: ghcr.io/neilcar/photoprism-index
+  # The Ubuntu image the switch is measured against.
+  OLD_IMAGE: ghcr.io/neilcar/photoprism-k8s@sha256:df9bd936e056c024fc5f0884325553733c13a66bfffd3fea44fbfc00eb4ef10a
+  TRIVY_VERSION: "0.76.1"
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+            trivy: Linux-64bit
+            trivy_sha256: c7cbe3137fb8a48a17574bede3dd6beb16742d1e9772929940fc90082c39d9c0
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            trivy: Linux-ARM64
+            trivy_sha256: e174dff2a6dba5e3ae41f8d0537a6324405bd08132497340304c6b20e0f16a1f
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Parallel index ref
+        id: pi
+        run: echo "ref=$(tr -d '[:space:]' <docker/photoprism/wolfi/PARALLEL_INDEX_REF)" >>"$GITHUB_OUTPUT"
+
+      # The parallel-index Go module, pinned by commit; .dockerignore keeps it out of the main context.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: neilcar/photoprism-k8s
+          ref: ${{ steps.pi.outputs.ref }}
+          path: parallel-index
+          sparse-checkout: setup/kubernetes/parallel-index
+          persist-credentials: false
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af >/dev/null
+          df -h /
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - name: Build metadata
+        id: meta
+        run: |
+          {
+            echo "build_tag=$(date -u +%y%m%d)-$(git rev-parse --short=9 HEAD)"
+            echo "revision=$(git rev-parse HEAD)"
+            echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/photoprism/wolfi/Dockerfile
+          build-contexts: parallel-index=parallel-index/setup/kubernetes/parallel-index
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            BUILD_TAG=${{ steps.meta.outputs.build_tag }}
+            REVISION=${{ steps.meta.outputs.revision }}
+          labels: |
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+          tags: photoprism-index:test
+          load: true
+
+      - name: Check
+        run: docker/photoprism/wolfi/check.sh photoprism-index:test
+
+      - name: Convert every format
+        run: docker/photoprism/wolfi/formats.sh photoprism-index:test
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The same conversions must pass on the Ubuntu image this one replaces.
+      - name: Convert every format with the Ubuntu image
+        run: |
+          set -euo pipefail
+          docker pull -q --platform "linux/${{ matrix.arch }}" "$OLD_IMAGE"
+          docker tag "$OLD_IMAGE" photoprism-k8s:old
+          docker/photoprism/wolfi/formats.sh photoprism-k8s:old
+
+      - name: Install Trivy
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o trivy.tgz \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_${{ matrix.trivy }}.tar.gz"
+          echo "${{ matrix.trivy_sha256 }}  trivy.tgz" | sha256sum -c -
+          mkdir -p bin && tar -xzf trivy.tgz -C bin trivy
+          echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+
+      # Both images are scanned with one Trivy database. Findings are split by path prefix as in
+      # the photoprism-base gate: upstream files vendored under /opt are listed apart, and only
+      # the other findings count for the switch.
+      - name: Compare Trivy findings
+        env:
+          ARCH: ${{ matrix.arch }}
+          COUNTS: |
+            def vendored: ["/opt/darktable", "/opt/rawtherapee", "/opt/yt-dlp"];
+            def bucket($path): ("/" + ($path | ltrimstr("/"))) as $p
+              | ([vendored[] as $v | select($p == $v or ($p | startswith($v + "/"))) | $v] | first) // "other";
+            [.Results[]? as $r | $r.Vulnerabilities[]?
+              | {id: .VulnerabilityID, pkg: (.PkgName // ""), sev: ((.Severity // "UNKNOWN") | ascii_upcase),
+                 bucket: bucket(.PkgPath // $r.Target // "")}] as $all
+            | reduce (["other"] + vendored)[] as $b ({}; .[$b] =
+                ([$all[] | select(.bucket == $b)] | unique_by([.id, .pkg])
+                 | reduce .[] as $f ({CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, UNKNOWN: 0};
+                     .[if has($f.sev) then $f.sev else "UNKNOWN" end] += 1)))
+        run: |
+          set -euo pipefail
+          db=(--db-repository "ghcr.io/aquasecurity/trivy-db,mirror.gcr.io/aquasec/trivy-db")
+          trivy image --quiet --download-db-only "${db[@]}"
+          scan() {
+            trivy image --quiet --skip-db-update --image-src docker --scanners vuln --timeout 60m \
+              --format json --output "$2" "$1"
+            [[ $(jq -r .Metadata.ImageConfig.architecture "$2") == "$ARCH" ]] ||
+              { echo "$1: scanned the wrong architecture"; exit 1; }
+          }
+          scan photoprism-index:test new.json
+          scan photoprism-k8s:old old.json
+          jq "$COUNTS" new.json >new-counts.json
+          jq "$COUNTS" old.json >old-counts.json
+
+          row() { jq -r --arg b "$2" --arg n "$1" '.[$b] | "| \($n) | \(.CRITICAL) | \(.HIGH) | \(.MEDIUM) | \(.LOW) | \(.UNKNOWN) |"' "$3"; }
+          # The switch needs fewer non-vendored findings in every severity the Ubuntu image has;
+          # where it has none, the new image must have none either.
+          verdict="$(jq -rn --slurpfile n new-counts.json --slurpfile o old-counts.json '
+            [("CRITICAL", "HIGH", "MEDIUM", "LOW") as $s | $n[0].other[$s] as $a | $o[0].other[$s] as $b
+              | select(($b > 0 and $a >= $b) or ($b == 0 and $a > 0)) | $s] as $worse
+            | if ($worse | length) == 0 then "lower in every severity"
+              else "**not lower** in " + ($worse | join(", ")) end')"
+          dbtime="$(trivy version --format json | jq -r '.VulnerabilityDB.UpdatedAt')"
+          {
+            echo "### Trivy findings ($ARCH)"
+            echo
+            echo "| Image | Critical | High | Medium | Low | Unknown |"
+            echo "|---|---:|---:|---:|---:|---:|"
+            row "photoprism-index, not vendored" other new-counts.json
+            row "photoprism-index, /opt/darktable (vendored)" /opt/darktable new-counts.json
+            row "photoprism-index, /opt/rawtherapee (vendored)" /opt/rawtherapee new-counts.json
+            row "photoprism-index, /opt/yt-dlp (vendored)" /opt/yt-dlp new-counts.json
+            row "photoprism-k8s@sha256:df9bd936…, not vendored" other old-counts.json
+            echo
+            echo "Not vendored, C/H/M/L: $verdict than photoprism-k8s@sha256:df9bd936…."
+            echo "Trivy ${TRIVY_VERSION}, vulnerability DB updated ${dbtime}; unique (ID, package) pairs."
+            echo "Trivy cannot see the libraries bundled inside the vendored AppImages (darktable, RawTherapee) and the yt-dlp binary."
+            echo
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: SBOM
+        run: |
+          trivy image --quiet --skip-db-update --image-src docker --format spdx-json \
+            --output "$RUNNER_TEMP/sbom.spdx.json" photoprism-index:test
+
+      - name: Push by digest
+        if: github.event_name != 'pull_request'
+        id: push
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: docker/photoprism/wolfi/Dockerfile
+          build-contexts: parallel-index=parallel-index/setup/kubernetes/parallel-index
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            BUILD_TAG=${{ steps.meta.outputs.build_tag }}
+            REVISION=${{ steps.meta.outputs.revision }}
+          labels: |
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Save digest and SBOM
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          echo "$DIGEST" >"$RUNNER_TEMP/out/digest"
+          mv "$RUNNER_TEMP/sbom.spdx.json" "$RUNNER_TEMP/out/"
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.event_name != 'pull_request'
+        with:
+          name: build-${{ matrix.arch }}
+          path: ${{ runner.temp }}/out/*
+          retention-days: 1
+
+  publish:
+    name: Publish
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: build-*
+          path: ${{ runner.temp }}/builds
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Tags
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,format=short
+            type=ref,event=branch
+            type=ref,event=tag
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create manifest
+        id: manifest
+        working-directory: ${{ runner.temp }}/builds
+        run: |
+          set -euo pipefail
+          mapfile -t tags < <(jq -r '.tags[]' <<<"$DOCKER_METADATA_OUTPUT_JSON")
+          args=()
+          for t in "${tags[@]}"; do args+=(-t "$t"); done
+          docker buildx imagetools create "${args[@]}" "$IMAGE@$(cat build-amd64/digest)" "$IMAGE@$(cat build-arm64/digest)"
+          digest="$(docker buildx imagetools inspect --format '{{json .Manifest}}' "${tags[0]}" | jq -r .digest)"
+          docker buildx imagetools inspect "$IMAGE@$digest"
+          echo "digest=$digest" >>"$GITHUB_OUTPUT"
+          echo "Published \`$IMAGE@$digest\` as: ${tags[*]}" >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Sign and attest
+        working-directory: ${{ runner.temp }}/builds
+        env:
+          DIGEST: ${{ steps.manifest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes --recursive "$IMAGE@$DIGEST"   # the index and each per-arch image
+          for arch in amd64 arm64; do
+            cosign attest --yes --type spdxjson --predicate "build-$arch/sbom.spdx.json" \
+              "$IMAGE@$(cat "build-$arch/digest")"
+          done
