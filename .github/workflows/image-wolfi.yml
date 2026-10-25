@@ -2,13 +2,15 @@ name: Image (Wolfi)
 
 # Builds the shell-free photoprism-index image on the distroless photoprism-base for amd64 and
 # arm64 on native runners, checks it and converts every media format with it, and compares its
-# Trivy findings with the Ubuntu photoprism-k8s image. The multi-arch manifest is published to
-# GHCR, signed and attested only when both architectures pass.
+# Trivy findings with the Ubuntu photoprism-k8s image. Each architecture is built once and pushed
+# by digest, and that digest is what gets tested and scanned. The tested digests are merged into
+# the published, signed and attested manifest list only when both architectures pass, including
+# the Trivy comparison, and only for the k8s-261007-skip-fixes branch and index-261007-* tags.
 
 on:
   push:
     branches: [k8s-261007-skip-fixes]
-    tags: ["k8s-261007-wolfi-*"]
+    tags: ["index-261007-*"]
   pull_request:
   workflow_dispatch:
 
@@ -26,8 +28,30 @@ env:
   TRIVY_VERSION: "0.76.1"
 
 jobs:
+  # One build tag and creation time for both architectures.
+  meta:
+    name: Build metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      build_tag: ${{ steps.meta.outputs.build_tag }}
+      revision: ${{ steps.meta.outputs.revision }}
+      created: ${{ steps.meta.outputs.created }}
+      parallel_index_ref: ${{ steps.meta.outputs.parallel_index_ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: meta
+        run: |
+          {
+            echo "build_tag=$(date -u +%y%m%d)-$(git rev-parse --short=9 HEAD)"
+            echo "revision=$(git rev-parse HEAD)"
+            echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "parallel_index_ref=$(tr -d '[:space:]' <docker/photoprism/wolfi/PARALLEL_INDEX_REF)"
+          } >>"$GITHUB_OUTPUT"
+
   build:
     name: Build ${{ matrix.arch }}
+    needs: meta
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     permissions:
@@ -48,15 +72,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - name: Parallel index ref
-        id: pi
-        run: echo "ref=$(tr -d '[:space:]' <docker/photoprism/wolfi/PARALLEL_INDEX_REF)" >>"$GITHUB_OUTPUT"
-
       # The parallel-index Go module, pinned by commit; .dockerignore keeps it out of the main context.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: neilcar/photoprism-k8s
-          ref: ${{ steps.pi.outputs.ref }}
+          ref: ${{ needs.meta.outputs.parallel_index_ref }}
           path: parallel-index
           sparse-checkout: setup/kubernetes/parallel-index
           persist-credentials: false
@@ -69,16 +89,16 @@ jobs:
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
-      - name: Build metadata
-        id: meta
-        run: |
-          {
-            echo "build_tag=$(date -u +%y%m%d)-$(git rev-parse --short=9 HEAD)"
-            echo "revision=$(git rev-parse HEAD)"
-            echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          } >>"$GITHUB_OUTPUT"
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build
+      # The one build of this architecture, pushed untagged by digest. Without provenance the
+      # digest is the platform image itself, which the tests, the scan and the attestation use.
+      - name: Build and push by digest
+        id: push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -86,25 +106,29 @@ jobs:
           build-contexts: parallel-index=parallel-index/setup/kubernetes/parallel-index
           platforms: linux/${{ matrix.arch }}
           build-args: |
-            BUILD_TAG=${{ steps.meta.outputs.build_tag }}
-            REVISION=${{ steps.meta.outputs.revision }}
+            BUILD_TAG=${{ needs.meta.outputs.build_tag }}
+            REVISION=${{ needs.meta.outputs.revision }}
           labels: |
-            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
-          tags: photoprism-index:test
-          load: true
+            org.opencontainers.image.created=${{ needs.meta.outputs.created }}
+          provenance: false
+          sbom: false
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Pull the pushed image
+        run: |
+          set -euo pipefail
+          ref="$IMAGE@$DIGEST"
+          docker pull -q "$ref"
+          [[ $(docker image inspect --format '{{.Architecture}}' "$ref") == "${{ matrix.arch }}" ]]
+          echo "REF=$ref" >>"$GITHUB_ENV"
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
 
       - name: Check
-        run: docker/photoprism/wolfi/check.sh photoprism-index:test
+        run: docker/photoprism/wolfi/check.sh "$REF"
 
       - name: Convert every format
-        run: docker/photoprism/wolfi/formats.sh photoprism-index:test
-
-      - name: Log in to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+        run: docker/photoprism/wolfi/formats.sh "$REF"
 
       # The same conversions must pass on the Ubuntu image this one replaces.
       - name: Convert every format with the Ubuntu image
@@ -126,7 +150,8 @@ jobs:
 
       # Both images are scanned with one Trivy database. Findings are split by path prefix as in
       # the photoprism-base gate: upstream files vendored under /opt are listed apart, and only
-      # the other findings count for the switch.
+      # the other findings count for the switch. The step fails after writing the table unless
+      # the image has fewer of them, which keeps Publish from running.
       - name: Compare Trivy findings
         env:
           ARCH: ${{ matrix.arch }}
@@ -151,7 +176,7 @@ jobs:
             [[ $(jq -r .Metadata.ImageConfig.architecture "$2") == "$ARCH" ]] ||
               { echo "$1: scanned the wrong architecture"; exit 1; }
           }
-          scan photoprism-index:test new.json
+          scan "$REF" new.json
           scan photoprism-k8s:old old.json
           jq "$COUNTS" new.json >new-counts.json
           jq "$COUNTS" old.json >old-counts.json
@@ -181,30 +206,14 @@ jobs:
             echo "Trivy cannot see the libraries bundled inside the vendored AppImages (darktable, RawTherapee) and the yt-dlp binary."
             echo
           } | tee -a "$GITHUB_STEP_SUMMARY"
+          [[ $verdict == "lower in every severity" ]]
 
       - name: SBOM
         run: |
           trivy image --quiet --skip-db-update --image-src docker --format spdx-json \
-            --output "$RUNNER_TEMP/sbom.spdx.json" photoprism-index:test
-
-      - name: Push by digest
-        if: github.event_name != 'pull_request'
-        id: push
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: docker/photoprism/wolfi/Dockerfile
-          build-contexts: parallel-index=parallel-index/setup/kubernetes/parallel-index
-          platforms: linux/${{ matrix.arch }}
-          build-args: |
-            BUILD_TAG=${{ steps.meta.outputs.build_tag }}
-            REVISION=${{ steps.meta.outputs.revision }}
-          labels: |
-            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
-          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+            --output "$RUNNER_TEMP/sbom.spdx.json" "$REF"
 
       - name: Save digest and SBOM
-        if: github.event_name != 'pull_request'
         run: |
           mkdir -p "$RUNNER_TEMP/out"
           echo "$DIGEST" >"$RUNNER_TEMP/out/digest"
@@ -213,7 +222,6 @@ jobs:
           DIGEST: ${{ steps.push.outputs.digest }}
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: github.event_name != 'pull_request'
         with:
           name: build-${{ matrix.arch }}
           path: ${{ runner.temp }}/out/*
@@ -222,7 +230,9 @@ jobs:
   publish:
     name: Publish
     needs: build
-    if: github.event_name != 'pull_request'
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/k8s-261007-skip-fixes' || startsWith(github.ref, 'refs/tags/index-261007-'))
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
