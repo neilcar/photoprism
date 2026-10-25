@@ -1,0 +1,15 @@
+# <sha256>  <url>  <name>
+# Small public samples for formats.sh. The binaries are never committed: formats.sh downloads
+# each file into a temp originals folder and verifies its sha256. <name> is the file name there.
+#
+# raw.nef: Nikon D40 NEF from raw.pixls.us (CC0). darktable and RawTherapee both convert it.
+# The PhotoPrism samples are pinned to a commit of github.com/photoprism/photoprism.
+# live.heic + live.mov share a base name, which makes them an Apple live photo pair.
+44e88bc77b7a531b22647bcd07b9393c4568062e8f0906d3bbdecb42fbe29e03  https://raw.pixls.us/data/Nikon/D40/DSC_1842.NEF  raw.nef
+c68e438f92341da271a731a059113db9395366f4c2f78ead5ded64deba7de463  https://raw.githubusercontent.com/photoprism/photoprism/65faaae5dd343e30c2341112d7089592b8514279/assets/samples/iphone_15_pro.heic  heic.heic
+2a2b5531ac2e1e3dd191f3386a09da2a39ce7f69b2d2dfd749c6c88129745040  https://raw.githubusercontent.com/photoprism/photoprism/65faaae5dd343e30c2341112d7089592b8514279/assets/samples/iphone_7.heic  live.heic
+8637a447a955133f776011e906f16db375631c9bd6ba3bbc24c0cf037c6fab07  https://raw.githubusercontent.com/photoprism/photoprism/65faaae5dd343e30c2341112d7089592b8514279/assets/samples/earth.mov  live.mov
+cfaf3684efc2348c7886e60c400ad25249a49b9f52b85b163433402b9e95e34a  https://raw.githubusercontent.com/photoprism/photoprism/65faaae5dd343e30c2341112d7089592b8514279/assets/samples/dice.jxl  jxl.jxl
+d6bba498e2e411ffdf09f2bd343f5bdb6f481a06363e4f45ee3e8815d18f57ce  https://raw.githubusercontent.com/photoprism/photoprism/65faaae5dd343e30c2341112d7089592b8514279/assets/samples/layered-16bit-small.tif  tiff16.tif
+769befbb55a0a72419cddbf5889835615ca7a46e39cff1c712a9a77a44c07430  https://raw.githubusercontent.com/photoprism/photoprism/65faaae5dd343e30c2341112d7089592b8514279/assets/samples/photoshop-standard-small.psd  psd.psd
+02e93d5a2f4208827ea7b6013f8bfa6bca697e91aac242276628e618898583ce  https://raw.githubusercontent.com/photoprism/photoprism/65faaae5dd343e30c2341112d7089592b8514279/assets/samples/example.mp4  mp4.mp4
