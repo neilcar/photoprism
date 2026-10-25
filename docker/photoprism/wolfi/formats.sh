@@ -88,19 +88,21 @@ convert all
 for name in "${names[@]}"; do
   has_preview all "$name"
 done
-if grep -q 'darktable' "$work/all.log"; then
-  pass "all: log names darktable"
+# The RAW must be converted by darktable, with no RawTherapee fallback.
+if grep -Eq 'convert: raw\.nef\.jpg created in .* \(darktable-cli\)' "$work/all.log" &&
+  ! grep -q '(rawtherapee-cli)' "$work/all.log"; then
+  pass "all: darktable converted raw.nef"
 else
-  fail "all: log does not name darktable"
+  fail "all: darktable did not convert raw.nef, or RawTherapee did"
 fi
 
 # Run 2: the RAW only, darktable disabled, a fresh sidecar, so RawTherapee converts it.
 CONVERT_ENV="-e PHOTOPRISM_DISABLE_DARKTABLE=true" convert rawtherapee --ext nef
 has_preview rawtherapee raw.nef
-if grep -qi 'rawtherapee' "$work/rawtherapee.log"; then
-  pass "rawtherapee: log names rawtherapee"
+if grep -Eq 'convert: raw\.nef\.jpg created in .* \(rawtherapee-cli\)' "$work/rawtherapee.log"; then
+  pass "rawtherapee: RawTherapee converted raw.nef"
 else
-  fail "rawtherapee: log does not name rawtherapee"
+  fail "rawtherapee: RawTherapee did not convert raw.nef"
 fi
 
 if [[ $failed -ne 0 ]]; then
