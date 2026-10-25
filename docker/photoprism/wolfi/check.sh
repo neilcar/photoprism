@@ -70,6 +70,26 @@ for key in ffmpeg-bin exiftool-bin darktable-bin rawtherapee-bin heifconvert-bin
   fi
 done
 
+# libvips must convert embedded color profiles, which needs its lcms2 support.
+ops="$(docker run --rm --entrypoint /usr/bin/vips "$img" -l)"
+if grep -q 'icc_transform' <<<"$ops"; then
+  pass "vips lists icc_transform"
+else
+  fail "vips does not list icc_transform"
+fi
+
+# Indexing a Display P3 JPEG must not log ICC transform errors.
+sample="$(cd "$(dirname "$0")/../../.." && pwd)/pkg/media/colors/testdata/DisplayP3.jpg"
+log="$(docker run --rm --tmpfs /photoprism/storage -v "$sample:/photoprism/originals/DisplayP3.jpg:ro" \
+  --entrypoint /opt/photoprism/bin/photoprism "$img" index 2>&1 || true)"
+if grep -qi 'icc.transform' <<<"$log"; then
+  fail "Display P3 index logged an ICC transform error"
+elif grep -Eq 'library: indexed [1-9][0-9]* files? ' <<<"$log"; then
+  pass "Display P3 indexed without ICC errors"
+else
+  fail "Display P3 index: $(tail -n 3 <<<"$log")"
+fi
+
 # The image runs as root.
 user="$(docker image inspect --format '{{.Config.User}}' "$img")"
 if [[ $user == "0:0" ]]; then

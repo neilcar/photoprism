@@ -1,5 +1,5 @@
 ##################################################### BUILD STAGE ######################################################
-FROM ghcr.io/neilcar/distroless/photoprism-base:latest-dev@sha256:fa23f362b5c1a19d6f86659c111c39e5fe7190fe69a8af23d3c5dff39328e178 AS build
+FROM ghcr.io/neilcar/distroless/photoprism-base:latest-dev@sha256:d4f6de31b34cee2c15196d3065f346066326e3167cfdd0ccd27f7faa331871fd AS build
 
 # Declare build parameters.
 ARG TARGETARCH
@@ -19,7 +19,7 @@ RUN env TMPDIR=/tmp ./scripts/dist/install-tensorflow.sh /usr
 RUN make all install DESTDIR=/opt/photoprism
 
 ################################################# PARALLEL INDEX STAGE ##################################################
-FROM ghcr.io/neilcar/distroless/photoprism-base:latest-dev@sha256:fa23f362b5c1a19d6f86659c111c39e5fe7190fe69a8af23d3c5dff39328e178 AS parallel-index-build
+FROM ghcr.io/neilcar/distroless/photoprism-base:latest-dev@sha256:d4f6de31b34cee2c15196d3065f346066326e3167cfdd0ccd27f7faa331871fd AS parallel-index-build
 
 USER root
 
@@ -30,7 +30,7 @@ RUN CGO_ENABLED=0 go build -trimpath -o /out/parallel-index ./cmd/parallel-index
 
 ################################################## PRODUCTION STAGE ####################################################
 #### Base Image: photoprism-base (Wolfi, no shell)
-FROM ghcr.io/neilcar/distroless/photoprism-base:latest@sha256:bbcfc372aa126f1f9b7af69442d729f036c940cb2617ba338d68b048fa716356
+FROM ghcr.io/neilcar/distroless/photoprism-base:latest@sha256:ac30dda7bd910fc6c74d7c8257e5e0901ca504100316a657486891d72b08d707
 
 # Declare build parameters.
 ARG TARGETARCH
