@@ -284,7 +284,7 @@ jobs:
           DIGEST: ${{ steps.manifest.outputs.digest }}
         run: |
           set -euo pipefail
-          cosign sign --yes --recursive "$IMAGE@$DIGEST"   # the index and each per-arch image
+          cosign sign --yes --recursive --registry-referrers-mode=legacy "$IMAGE@$DIGEST"   # the index and each per-arch image
           for arch in amd64 arm64; do
             cosign attest --yes --type spdxjson --predicate "build-$arch/sbom.spdx.json" \
               "$IMAGE@$(cat "build-$arch/digest")"
