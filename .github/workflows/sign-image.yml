@@ -1,0 +1,47 @@
+name: Sign image digest
+
+# Backfill / on-demand: cosign-sign an already-published image digest with this
+# repository's GitHub Actions OIDC identity, so Kyverno's keyless verifyImages
+# policy (any neilcar workflow identity, GitHub OIDC issuer) accepts the running
+# image. Dispatch with the image repository and the digest to sign.
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Image repository (no tag/digest), e.g. ghcr.io/neilcar/stash"
+        required: true
+      digest:
+        description: "Digest to sign, e.g. sha256:abc123..."
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v2.4.3
+      - name: Sign and verify the digest
+        env:
+          REF: ${{ inputs.image }}@${{ inputs.digest }}
+        run: |
+          set -euo pipefail
+          cosign version
+          # Legacy tag-based signature storage: GHCR's OCI 1.1 referrers mode
+          # stores a signature the Kyverno verifier cannot find on this account.
+          cosign sign --yes --recursive --registry-referrers-mode=legacy "$REF"
+          echo "--- verifying the signature is discoverable + policy-valid ---"
+          cosign verify \
+            --certificate-identity-regexp='^https://github\.com/neilcar/[^/]+/\.github/workflows/.+@refs/.+$' \
+            --certificate-oidc-issuer='https://token.actions.githubusercontent.com' \
+            "$REF"
